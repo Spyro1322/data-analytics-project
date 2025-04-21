@@ -1,0 +1,125 @@
+create table if not exists diesel-media-457308-t3.reporting_db.all_dates (
+  date_column DATE
+)
+
+insert into diesel-media-457308-t3.reporting_db.all_dates (date_column)
+select
+date_add('2015-01-01', interval n day) as date_column
+from
+unnest(generate_array(0, date_diff('2024-12-31', '2015-01-01', day))) as n
+
+create table if not exists diesel-media-457308-t3.reporting_db.reporting_periods (
+  reporting_period string,
+  reporting_date date,
+)
+
+insert into diesel-media-457308-t3.reporting_db.reporting_periods (reporting_period, reporting_date)
+
+with processed_dates as (
+  select
+  'Day' as reporting_period
+  , date_trunc(date_column, day) as reporting_date
+  from diesel-media-457308-t3.reporting_db.all_dates
+  group by 1,2
+  union all
+
+  select
+  'Week' as reporting_period
+  , date_trunc(date_column, week) as reporting_date
+  from diesel-media-457308-t3.reporting_db.all_dates
+  group by 1,2
+  union all
+
+  select
+  'Month' as reporting_period
+  , date_trunc(date_column, month) as reporting_date
+  from diesel-media-457308-t3.reporting_db.all_dates
+  group by 1,2
+  union all
+
+  select
+  'Quarter' as reporting_period
+  , date_trunc(date_column, quarter) as reporting_date
+  from diesel-media-457308-t3.reporting_db.all_dates
+  group by 1,2
+  union all
+
+  select
+  'Year' as reporting_period
+  , date_trunc(date_column, year) as reporting_date
+  from diesel-media-457308-t3.reporting_db.all_dates
+  group by 1,2
+)
+
+select * from processed_dates
+where reporting_date <= current_date
+
+WITH
+  reporting_periods_table AS (
+    SELECT
+      reporting_period,
+      reporting_date
+    FROM
+      diesel-media-457308-t3.reporting_db.reporting_periods
+  )
+, rep_revenue_per_period as (
+SELECT
+  reporting_periods_table.reporting_period,
+  reporting_periods_table.reporting_date,
+  COALESCE(SUM(payment.payment_amount), 0) AS total_revenue
+FROM
+  reporting_periods_table
+  LEFT JOIN
+  diesel-media-457308-t3.staging_db.stg_payment AS payment
+  ON DATE(payment.payment_date) = reporting_periods_table.reporting_date
+  LEFT JOIN
+  diesel-media-457308-t3.staging_db.stg_rental AS rental
+  ON payment.rental_id = rental.rental_id
+  LEFT JOIN
+  diesel-media-457308-t3.staging_db.stg_inventory AS inventory
+  ON rental.inventory_id = inventory.inventory_id
+  LEFT JOIN
+  diesel-media-457308-t3.staging_db.stg_film AS film
+  ON inventory.film_id = film.film_id
+WHERE
+  film.film_title <> 'GOODFELLAS SALUTE' AND reporting_periods_table.reporting_date >= '2015-01-01' AND
+  reporting_periods_table.reporting_period IN ('Day', 'Month', 'Year')
+GROUP BY 1, 2
+)
+
+select * from final limit 50
+
+WITH
+  reporting_periods AS (
+    SELECT
+      reporting_period,
+      reporting_date
+    FROM
+      diesel-media-457308-t3.reporting_db.reporting_periods
+  )
+
+, rep_revenue_per_customer_and_period as (
+SELECT
+  c.customer_id,
+  reporting_periods.reporting_period,
+  reporting_periods.reporting_date,
+  COALESCE(SUM(p.payment_amount), 0) AS total_revenue
+FROM
+  reporting_periods
+  LEFT JOIN diesel-media-457308-t3.staging_db.stg_payment AS p ON DATE(p.payment_date) = reporting_periods.reporting_date
+  LEFT JOIN diesel-media-457308-t3.staging_db.stg_rental AS r ON p.rental_id = r.rental_id
+  LEFT JOIN diesel-media-457308-t3.staging_db.stg_customer AS c ON r.customer_id = c.customer_id
+  LEFT JOIN diesel-media-457308-t3.staging_db.stg_inventory AS i ON r.inventory_id = i.inventory_id
+  LEFT JOIN diesel-media-457308-t3.staging_db.stg_film AS f ON i.film_id = f.film_id
+WHERE
+  f.film_title <> 'GOODFELLAS SALUTE'
+  AND reporting_periods.reporting_period IN ('Day', 'Month', 'Year')
+GROUP BY 1,2,3
+HAVING
+  SUM(p.payment_amount) > 0
+ORDER BY
+  c.customer_id,
+  reporting_periods.reporting_date
+)
+
+select * from rep_revenue_per_customer_and_period limit 50
